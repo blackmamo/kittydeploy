@@ -6,13 +6,13 @@
 # Terraform backend settings - so we all share the same bucket
 #
  
-//terraform {
-//  backend "s3" {
-//    bucket = "sl-terraform-backend"
-//    key    = "terraform.tfstate"
-//    region = "eu-west-1"
-//  }
-//}
+terraform {
+  backend "s3" {
+    bucket = "sl-terraform-backend"
+    key    = "terraform.tfstate"
+    region = "eu-west-1"
+  }
+}
 
 variable "aws_region" {
   default = "eu-west-1"
