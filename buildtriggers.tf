@@ -193,7 +193,7 @@ resource "aws_lambda_function" "pr-handler" {
     function_name = "pr-handler"
     role = "${aws_iam_role.pr-handler.arn}"
     handler = "lambda.handler"
-    source_code_hash = "${base64sha256(file("handler.zip"))}"
+    source_code_hash = "${data.archive_file.lambda_zip.output_base64sha256}"
     memory_size = 256
     timeout = 300
     runtime = "nodejs8.10"
