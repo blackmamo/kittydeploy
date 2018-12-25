@@ -23,6 +23,7 @@ provider "aws" {
 }
 
 variable "github_oauth_token" {
+  type="string"
   default = ""
 }
 
@@ -207,4 +208,211 @@ resource "aws_lambda_permission" "apigw_lambda" {
   principal     = "apigateway.amazonaws.com"
 
   source_arn = "${aws_api_gateway_rest_api.gh.execution_arn}/*/POST/pr-handler-3"
+}
+
+#
+# CodeBuild roles
+#
+
+resource "aws_iam_role" "codebuild_role" {
+  name = "codebuild-role-"
+
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "codebuild.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_policy" "codebuild_policy" {
+  name        = "codebuild-policy"
+  path        = "/service-role/"
+  description = "Policy used in trust relationship with CodeBuild"
+
+  policy = <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect":"Allow",
+      "Action": [
+        "s3:*"
+      ],
+      "Resource": [
+        "${aws_s3_bucket.ci.arn}",
+        "${aws_s3_bucket.ci.arn}/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Resource": [
+        "*"
+      ],
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ]
+    }
+  ]
+}
+POLICY
+}
+
+resource "aws_iam_policy_attachment" "codebuild_policy_attachment" {
+  name       = "codebuild-policy-attachment"
+  policy_arn = "${aws_iam_policy.codebuild_policy.arn}"
+  roles      = ["${aws_iam_role.codebuild_role.id}"]
+}
+
+#
+# CodeBuild configurations
+#
+
+resource "aws_codebuild_project" "build-code" {
+  name          = "build-code"
+  description   = "Run the build"
+  build_timeout = "10"
+  service_role  = "${aws_iam_role.codebuild_role.arn}"
+
+  artifacts {
+    type = "NO_ARTIFACTS"
+  }
+
+  environment {
+    compute_type = "BUILD_GENERAL1_SMALL"
+    image        = "aws/codebuild/nodejs:10.14.1"
+    type         = "LINUX_CONTAINER"
+  }
+
+  source {
+    type     = "GITHUB"
+    location = "https://github.com/blackmamo/test.git"
+
+    buildspec = <<EOF
+version: 0.1
+phases:
+  install:
+    commands:
+      - echo "hello world"
+  build:
+    commands:
+      - echo "bye world"
+EOF
+  }
+}
+
+resource "aws_s3_bucket" "ci" {
+  bucket = "sl-github-hook-codepipeline-ci-bucket"
+  acl    = "private"
+}
+
+resource "aws_iam_role" "ci" {
+  name = "test-role"
+
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "codepipeline.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy" "codepipeline_policy" {
+  name = "codepipeline_policy"
+  role = "${aws_iam_role.ci.id}"
+
+  policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect":"Allow",
+      "Action": [
+        "s3:*"
+      ],
+      "Resource": [
+        "${aws_s3_bucket.ci.arn}",
+        "${aws_s3_bucket.ci.arn}/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "codebuild:BatchGetBuilds",
+        "codebuild:StartBuild"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+EOF
+}
+
+#
+# CodePipeline configurations
+#
+
+resource "aws_codepipeline" "ci" {
+  name     = "pr-template"
+  role_arn = "${aws_iam_role.ci.arn}"
+
+  artifact_store {
+    location = "${aws_s3_bucket.ci.bucket}"
+    type     = "S3"
+  }
+
+  stage {
+    name = "Source"
+
+    action {
+      name             = "Source"
+      category         = "Source"
+      owner            = "ThirdParty"
+      provider         = "GitHub"
+      version          = "1"
+      output_artifacts = ["test"]
+
+      configuration {
+        Owner      = "blackmamo"
+        Repo       = "test"
+        Branch     = "master"
+        OAuthToken = "${var.github_oauth_token}"
+      }
+    }
+  }
+
+  stage {
+    name = "Build"
+
+    action {
+      name            = "Build"
+      category        = "Build"
+      owner           = "AWS"
+      provider        = "CodeBuild"
+      input_artifacts = ["test"]
+      version         = "1"
+
+      configuration {
+        ProjectName = "${aws_codebuild_project.build-code.name}"
+      }
+    }
+  }
 }
