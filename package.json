@@ -1,0 +1,34 @@
+{
+  "name": "kittydeploy",
+  "version": "0.0.1",
+  "description": "deploy tooling for kitty cat project",
+  "main": "lambda.js",
+  "scripts": {
+    "test": "npx mocha -u tdd"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blackmamo/kittydeploy.git"
+  },
+  "keywords": [
+    "build",
+    "terraform",
+    "code",
+    "pipeline",
+    "github"
+  ],
+  "author": "Matthew Amos",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/blackmamo/kittydeploy/issues"
+  },
+  "homepage": "https://github.com/blackmamo/kittydeploy#readme",
+  "devDependencies": {
+    "aws-sdk-mock": "^4.3.0",
+    "chai": "^4.2.0",
+    "mocha": "^5.2.0"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.382.0"
+  }
+}

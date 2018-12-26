@@ -27,14 +27,19 @@ variable "github_oauth_token" {
   default = ""
 }
 
+variable "github_shared_secret" {
+  type="string"
+  default = ""
+}
+
 variable "aws_account_id" {
   default = ""
 }
 
 data "archive_file" "lambda_zip" {
     type          = "zip"
-    source_file   = "lambda.js"
-    output_path   = "handler.zip"
+    source_file   = "src/pr-handler.js"
+    output_path   = "build/pr-handler.zip"
 }
 
 #
@@ -60,7 +65,7 @@ resource "aws_api_gateway_method" "webhooks" {
   rest_api_id = "${aws_api_gateway_rest_api.gh.id}"
   resource_id   = "${aws_api_gateway_resource.pr-handler.id}"
   http_method   = "POST"
-  authorization = "AWS_IAM"
+  authorization = "NONE"
   request_parameters = {
     "method.request.header.X-GitHub-Event" = true
     "method.request.header.X-GitHub-Delivery" = true
@@ -106,8 +111,26 @@ resource "aws_api_gateway_integration_response" "webhook" {
     "method.response.header.Content-Type" = "integration.response.header.Content-Type"
     "method.response.header.Access-Control-Allow-Origin" = "'*'"
   }
+}
 
-  selection_pattern = ".*"
+resource "aws_api_gateway_integration_response" "error" {
+
+  depends_on = ["aws_api_gateway_integration.webhooks"]
+  rest_api_id = "${aws_api_gateway_rest_api.gh.id}"
+  resource_id = "${aws_api_gateway_resource.pr-handler.id}"
+  http_method = "${aws_api_gateway_integration.webhooks.http_method}"
+  status_code = "500"
+
+  response_templates {
+    "application/json" = "internal error!"
+  }
+
+  response_parameters = {
+    "method.response.header.Content-Type" = "integration.response.header.Content-Type"
+    "method.response.header.Access-Control-Allow-Origin" = "'*'"
+  }
+
+  selection_pattern = ".+"
 }
 
 resource "aws_api_gateway_method_response" "200" {
@@ -122,11 +145,25 @@ resource "aws_api_gateway_method_response" "200" {
   }
 }
 
+resource "aws_api_gateway_method_response" "500" {
+  depends_on = ["aws_api_gateway_method.webhooks"]
+  rest_api_id = "${aws_api_gateway_rest_api.gh.id}"
+  resource_id = "${aws_api_gateway_resource.pr-handler.id}"
+  http_method = "${aws_api_gateway_method.webhooks.http_method}"
+  status_code = "500"
+  response_parameters = {
+    "method.response.header.Content-Type" = true
+    "method.response.header.Access-Control-Allow-Origin" = true
+  }
+}
+
 resource "aws_api_gateway_deployment" "gh" {
   depends_on = ["aws_api_gateway_method.webhooks", "aws_api_gateway_integration_response.webhook", "aws_api_gateway_method_response.200"]
 
   rest_api_id = "${aws_api_gateway_rest_api.gh.id}"
   stage_name  = "test"
+  // See https://github.com/hashicorp/terraform/issues/6613#issuecomment-322264393
+  stage_description = "${md5(file("buildtriggers.tf"))}"
 }
 
 #
@@ -145,6 +182,12 @@ resource "aws_iam_policy" "pr-handler-policy" {
             "Sid": "Stmt1476919244000",
             "Effect": "Allow",
             "Action": [
+                "codepipeline:CreatePipeline",
+                "codepipeline:DeletePipeline",
+                "codepipeline:GetPipelineState",
+                "codepipeline:ListPipelines",
+                "codepipeline:GetPipeline",
+                "codepipeline:UpdatePipeline",
                 "iam:PassRole"
             ],
             "Resource": [
@@ -190,14 +233,20 @@ resource "aws_iam_role_policy_attachment" "pr-handler-attach" {
 }
 
 resource "aws_lambda_function" "pr-handler" {
-    filename = "handler.zip"
+    filename = "${data.archive_file.lambda_zip.output_path}"
     function_name = "pr-handler"
     role = "${aws_iam_role.pr-handler.arn}"
-    handler = "lambda.handler"
+    handler = "pr-handler.handler"
     source_code_hash = "${data.archive_file.lambda_zip.output_base64sha256}"
     memory_size = 256
     timeout = 300
-    runtime = "nodejs8.10"
+    runtime = "nodejs8.10",
+    environment {
+	  variables = {
+	    PIPELINE_TEMPLATE = "${aws_codepipeline.ci.name}",
+		GITHUB_OAUTH_TOKEN = "${var.github_oauth_token}"
+	  }
+	}
 }
 
 
@@ -207,7 +256,7 @@ resource "aws_lambda_permission" "apigw_lambda" {
   function_name = "${aws_lambda_function.pr-handler.arn}"
   principal     = "apigateway.amazonaws.com"
 
-  source_arn = "${aws_api_gateway_rest_api.gh.execution_arn}/*/POST/pr-handler-3"
+  source_arn = "${aws_api_gateway_rest_api.gh.execution_arn}/*/POST/pr-handler"
 }
 
 #
@@ -395,6 +444,7 @@ resource "aws_codepipeline" "ci" {
         Repo       = "test"
         Branch     = "master"
         OAuthToken = "${var.github_oauth_token}"
+		PollForSourceChanges = "false"
       }
     }
   }
@@ -416,3 +466,39 @@ resource "aws_codepipeline" "ci" {
     }
   }
 }
+
+#
+# Add github webhook - only works with github organisation - add in when move to sl repo
+#
+
+//resource "aws_codepipeline_webhook" "master-webhook" {
+//  name            = "master-branch-webhook"
+//  authentication  = "GITHUB_HMAC"
+//  target_action   = "Source"
+//  target_pipeline = "${aws_codepipeline.ci.name}"
+//
+//  authentication_configuration {
+//    secret_token = "${var.github_shared_secret}"
+//  }
+//
+//  filter {
+//    json_path    = "$.ref"
+//    match_equals = "refs/heads/{Branch}"
+//  }
+//}
+
+# Wire the CodePipeline webhook into a GitHub repository.
+//resource "github_repository_webhook" "master-webhook" {
+//  repository = "${github_repository.repo.name}"
+//
+//  name = "web"
+//
+//  configuration {
+//    url          = "${aws_codepipeline_webhook.ci.url}"
+//    content_type = "form"
+//    insecure_ssl = true
+//    secret       = "${local.github_shared_secret}"
+//  }
+//
+//  events = ["push"]
+//}
