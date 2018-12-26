@@ -8,4 +8,5 @@
 # .tfvars files
 *.tfvars
 
-handler.zip
+build/*
+node_modules
