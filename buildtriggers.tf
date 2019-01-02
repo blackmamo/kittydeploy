@@ -327,7 +327,7 @@ resource "aws_iam_policy" "codebuild_policy" {
         "iam:*",
         "lambda:*",
         "apigateway:*",
-        "apigateway:*"
+        "dynamodb:*"
       ]
     }
   ]
